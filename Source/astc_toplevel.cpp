@@ -21,6 +21,8 @@
 
 #include "astc_codec_internals.h"
 
+#include "stb_image_resize.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -391,6 +393,183 @@ static void store_astc_file(
 	free(buffer);
 }
 
+void store_ktx_file(const astc_codec_image * input_image,
+                    const char *filename, int xdim, int ydim, int zdim, const error_weighting_params * ewp, astc_decode_mode decode_mode, swizzlepattern swz_encode, int threadcount)
+{
+    int xsize = input_image->xsize;
+    int ysize = input_image->ysize;
+    int zsize = input_image->zsize;
+
+    int xblocks = (xsize + xdim - 1) / xdim;
+    int yblocks = (ysize + ydim - 1) / ydim;
+    int zblocks = (zsize + zdim - 1) / zdim;
+
+    uint8_t *buffer = (uint8_t *) malloc(xblocks * yblocks * zblocks * 16);
+    if (!buffer)
+    {
+        printf("Ran out of memory\n");
+        exit(1);
+    }
+
+    if (!suppress_progress_counter)
+        printf("%d blocks to process ..\n", xblocks * yblocks * zblocks);
+
+    encode_astc_image(input_image, NULL, xdim, ydim, zdim, ewp, decode_mode, swz_encode, swz_encode, buffer, 0, threadcount);
+
+    end_coding_time = get_time();
+
+    int encoded_data_size = xblocks * yblocks * zblocks * 16;
+
+    store_ktx_astc_encoded_image(filename,
+                                 1,
+                                 xsize, ysize, zsize,
+                                 xdim, ydim, zdim,
+                                 3, // channel count
+                                 decode_mode,
+                                 &buffer,
+                                 &encoded_data_size);
+}
+
+int mip_level_byte_size(int xsize, int ysize, int zsize, int xdim, int ydim, int zdim)
+{
+    int xblocks = (xsize + xdim - 1) / xdim;
+    int yblocks = (ysize + ydim - 1) / ydim;
+    int zblocks = (zsize + zdim - 1) / zdim;
+    return xblocks * yblocks * zblocks * 16;
+}
+
+int mip_chain_byte_size(int xsize, int ysize, int zsize, int xdim, int ydim, int zdim)
+{
+    int total_size = 0;
+    
+    total_size += mip_level_byte_size(xsize, ysize, zsize, xdim, ydim, zdim);
+    
+    while (xsize > 1 || ysize > 1 || zsize > 1)
+    {
+        xsize = MAX(1, xsize / 2);
+        ysize = MAX(1, ysize / 2);
+        zsize = MAX(1, zsize / 2);
+        total_size += mip_level_byte_size(xsize, ysize, zsize, xdim, ydim, zdim);
+    }
+    
+    return total_size;
+}
+
+int mip_level_count(int xsize, int ysize, int zsize)
+{
+    int count = 0;
+    int maxdim = MAX(xsize, MAX(ysize, zsize));
+    
+    while (maxdim > 0)
+    {
+        ++count;
+        maxdim /= 2;
+    }
+
+    return count;
+}
+
+
+void store_mipmap_ktx_file(const astc_codec_image * input_image,
+                           const char *filename, int xdim, int ydim, int zdim, const error_weighting_params * ewp, astc_decode_mode decode_mode, swizzlepattern swz_encode, int threadcount)
+{
+    const int bitness = 8;
+    
+    const int alpha_chan = 3;
+    const int num_channels = 4;
+
+//    if (input_image->bitness != 8)
+//    {
+//        printf("Mipmap generation not supported for 16-bit per channel formats\n");
+//        exit(1);
+//    }
+    
+    int xsize = input_image->xsize;
+    int ysize = input_image->ysize;
+    int zsize = input_image->zsize;
+
+    int mip_count = mip_level_count(xsize, ysize, zsize);
+    
+    uint8_t** mipmap_level_data = new uint8_t*[mip_count];
+    int* mipmap_level_sizes = new int[mip_count];
+    for (int i = 0; i < mip_count; ++i)
+    {
+        int mip_xsize = MAX(1, xsize >> i);
+        int mip_ysize = MAX(1, ysize >> i);
+        int mip_zsize = MAX(1, zsize >> i);
+        int mip_byte_size = mip_level_byte_size(mip_xsize, mip_ysize, mip_zsize, xdim, ydim, zdim);
+        mipmap_level_sizes[i] = mip_byte_size;
+        mipmap_level_data[i] = reinterpret_cast<uint8_t*>(malloc(mip_byte_size));
+        
+        if (mipmap_level_data[i] == nullptr)
+        {
+            printf("Ran out of memory\n");
+            exit(1);
+        }
+    }
+
+    const astc_codec_image* mip_level_image = input_image;
+    
+    for (int level = 0; level < mip_count; ++level)
+    {
+        int xblocks = (xsize + xdim - 1) / xdim;
+        int yblocks = (ysize + ydim - 1) / ydim;
+        int zblocks = (zsize + zdim - 1) / zdim;
+
+        if (!suppress_progress_counter)
+            printf("%d blocks to process ..\n", xblocks * yblocks * zblocks);
+
+        encode_astc_image(mip_level_image, NULL, xdim, ydim, zdim, ewp, decode_mode, swz_encode, swz_encode, mipmap_level_data[level], 0, threadcount);
+
+        end_coding_time = get_time();
+        
+        xsize = MAX(1, xsize / 2);
+        ysize = MAX(1, ysize / 2);
+        zsize = MAX(1, zsize / 2);
+        
+        const astc_codec_image* next_mip_level_image = allocate_image(bitness, xsize, ysize, zsize, 0);
+        
+        if (decode_mode == DECODE_LDR_SRGB)
+        {
+            stbir_resize_uint8_srgb(mip_level_image->data8[0][0],
+                                    mip_level_image->xsize, mip_level_image->ysize, 0,
+                                    next_mip_level_image->data8[0][0],
+                                    xsize, ysize, 0,
+                                    num_channels, alpha_chan, 0);
+        }
+        else
+        {
+            stbir_resize_uint8(mip_level_image->data8[0][0],
+                               mip_level_image->xsize, mip_level_image->ysize, 0,
+                               next_mip_level_image->data8[0][0],
+                               xsize, ysize, 0,
+                               num_channels);
+        }
+        
+        if (mip_level_image != input_image)
+        {
+            // Safe cast because we never call this on the input image
+            destroy_image(const_cast<astc_codec_image*>(mip_level_image));
+        }
+        
+        mip_level_image = next_mip_level_image;
+    }
+    while (xsize > 1 || ysize > 1 || zsize > 1);
+    
+    printf("\n");
+
+    store_ktx_astc_encoded_image(filename,
+                                 mip_count,
+                                 input_image->xsize, input_image->ysize, input_image->zsize,
+                                 xdim, ydim, zdim,
+                                 3, // channel count
+                                 decode_mode,
+                                 mipmap_level_data,
+                                 mipmap_level_sizes);
+}
+
+
+
 static astc_codec_image *pack_and_unpack_astc_image(
 	const astc_codec_image* input_image,
 	int xdim,
@@ -676,6 +855,8 @@ int astc_main(
 	int low_fstop = -10;
 	int high_fstop = 10;
 
+    int generate_mipmaps = 0;
+    
 	// parse the command line's encoding options.
 	int argidx;
 	if (op_mode == ASTC_ENCODE || op_mode == ASTC_ENCODE_AND_DECODE)
@@ -757,6 +938,11 @@ int astc_main(
 			silentmode = 1;
 			suppress_progress_counter = 1;
 		}
+        else if (!strcmp(argv[argidx], "-mipmap"))
+        {
+            argidx++;
+            generate_mipmaps = 1;
+        }
 		else if (!strcmp(argv[argidx], "-v"))
 		{
 			argidx += 7;
@@ -1424,6 +1610,7 @@ int astc_main(
 				printf("Target bitrate provided: %.2f bpp\n", (double)target_bitrate);
 			printf("2D Block size: %dx%d (%.2f bpp)\n", xdim_2d, ydim_2d, 128.0 / (xdim_2d * ydim_2d));
 			printf("3D Block size: %dx%dx%d (%.2f bpp)\n", xdim_3d, ydim_3d, zdim_3d, 128.0 / (xdim_3d * ydim_3d * zdim_3d));
+            printf("Mipmap generation %s\n", generate_mipmaps ? "enabled" : "disabled");
 			printf("Radius for mean-and-stdev calculations: %d texels\n", ewp.mean_stdev_radius);
 			printf("RGB power: %g\n", (double)ewp.rgb_power);
 			printf("RGB base-weight: %g\n", (double)ewp.rgb_base_weight);
@@ -1675,8 +1862,23 @@ int astc_main(
 
 	if (op_mode == ASTC_ENCODE)
 	{
-		store_astc_file(input_image, output_filename, xdim, ydim, zdim, &ewp, decode_mode, swz_encode, thread_count);
-	}
+        const char *dot = strrchr(output_filename, '.');
+        if (dot && strcasecmp(dot + 1, "ktx") == 0)
+        {
+            if (generate_mipmaps)
+            {
+                store_mipmap_ktx_file(input_image, output_filename, xdim, ydim, zdim, &ewp, decode_mode, swz_encode, thread_count);
+            }
+            else
+            {
+                store_ktx_file(input_image, output_filename, xdim, ydim, zdim, &ewp, decode_mode, swz_encode, thread_count);
+            }
+        }
+        else
+        {
+            store_astc_file(input_image, output_filename, xdim, ydim, zdim, &ewp, decode_mode, swz_encode, thread_count);
+        }
+    }
 
 	destroy_image(input_image);
 

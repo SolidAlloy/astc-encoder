@@ -766,6 +766,107 @@ astc_codec_image* load_ktx_uncompressed_image(
 	return astc_img;
 }
 
+uint32_t astc_gl_format_from_block_size(int xdim, int ydim, int zdim, astc_decode_mode decode_mode)
+{
+    int format_offset = 0;
+    
+    if (zdim <= 1)
+    {
+        if (xdim == 4 && ydim == 4)
+            format_offset = 0;
+        else if (xdim == 5 && ydim == 4)
+            format_offset = 1;
+        else if (xdim == 5 && ydim == 5)
+            format_offset = 2;
+        else if (xdim == 6 && ydim == 5)
+            format_offset = 3;
+        else if (xdim == 6 && ydim == 6)
+            format_offset = 4;
+        else if (xdim == 8 && ydim == 5)
+            format_offset = 5;
+        else if (xdim == 8 && ydim == 6)
+            format_offset = 6;
+        else if (xdim == 8 && ydim == 8)
+            format_offset = 7;
+        else if (xdim == 10 && ydim == 5)
+            format_offset = 8;
+        else if (xdim == 10 && ydim == 6)
+            format_offset = 9;
+        else if (xdim == 10 && ydim == 8)
+            format_offset = 10;
+        else if (xdim == 10 && ydim == 10)
+            format_offset = 11;
+        else if (xdim == 12 && ydim == 10)
+            format_offset = 12;
+        else if (xdim == 12 && ydim == 12)
+            format_offset = 13;
+    }
+    
+    return (decode_mode == DECODE_LDR_SRGB ? 0x93d0 : 0x93b0) + format_offset;
+}
+
+int store_ktx_astc_encoded_image(const char *ktx_filename,
+                                 int mipmap_level_count,
+                                 int xsize, int ysize, int zsize,
+                                 int xdim, int ydim, int zdim,
+                                 int channel_count,
+                                 astc_decode_mode decode_mode,
+                                 uint8_t** encoded_mipmap_levels,
+                                 int* encoded_mipmap_data_sizes)
+
+{
+    int gl_format_of_channels[4] = { GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA };
+
+    ktx_header hdr;
+
+    memcpy(hdr.magic, ktx_magic, 12);
+    hdr.endianness = 0x04030201;
+    hdr.gl_type = 0;
+    hdr.gl_type_size = 0;
+    hdr.gl_format = 0;
+    hdr.gl_internal_format = astc_gl_format_from_block_size(xdim, ydim, zdim, decode_mode);
+    hdr.gl_base_internal_format = gl_format_of_channels[channel_count];
+    hdr.pixel_width = xsize;
+    hdr.pixel_height = ysize;
+    hdr.pixel_depth = (zsize == 1) ? 0 : zsize;
+    hdr.number_of_array_elements = 0;
+    hdr.number_of_faces = 1;
+    hdr.number_of_mipmap_levels = mipmap_level_count;
+    hdr.bytes_of_key_value_data = 0;
+    
+    int retval = 0;
+    
+    FILE *wf = fopen(ktx_filename, "wb");
+    if (wf)
+    {
+        size_t hdr_bytes_written = fwrite(&hdr, 1, sizeof(ktx_header), wf);
+        if (hdr_bytes_written != sizeof(ktx_header))
+        {
+            retval = -1;
+        }
+        else
+        {
+            for (int i = 0; i < mipmap_level_count; ++i)
+            {
+                uint32_t image_bytes = static_cast<uint32_t>(encoded_mipmap_data_sizes[i]);
+                size_t expected_bytes_written = image_bytes + 4;
+                size_t bytecount_bytes_written = fwrite(&image_bytes, 1, 4, wf);
+                size_t data_bytes_written = fwrite(encoded_mipmap_levels[i], 1, encoded_mipmap_data_sizes[i], wf);
+                if (data_bytes_written + bytecount_bytes_written != expected_bytes_written)
+                {
+                    retval = -1;
+                    break;
+                }
+            }
+        }
+        
+        fclose(wf);
+    }
+
+    return retval;
+}
+
+
 int store_ktx_uncompressed_image(
 	const astc_codec_image* img,
 	const char* ktx_filename,

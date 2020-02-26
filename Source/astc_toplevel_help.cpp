@@ -202,6 +202,10 @@ COMPRESSION
            _<slice_index> to find the file to load. For example, an input
            named "input.png" would load as input_0.png, input_1.png, etc.
 
+        -mipmap
+           Generate a full mipmap chain. Only available when exporting to
+           a KTX file.
+
 COMPRESSION TIPS & TRICKS
        ASTC is a block-based format that can be prone to block artifacts.
        If block artifacts are a problem when compressing a given texture,

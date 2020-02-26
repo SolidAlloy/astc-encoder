@@ -67,6 +67,7 @@ SOURCES = \
 EXTERNAL_SOURCES = \
     stb_image.h \
     stb_image_write.h \
+    stb_image_resize.h \
     tinyexr.h
 
 HEADERS = \
@@ -74,6 +75,7 @@ HEADERS = \
     astc_mathlib.h \
     stb_image.h \
     stb_image_write.h \
+    stb_image_resize.h \
     tinyexr.h
 
 OBJECTS = $(SOURCES:.cpp=-$(VEC).o)
@@ -128,6 +130,10 @@ stb_image-$(VEC).o: stb_image.h
 
 stb_image_write-$(VEC).o: stb_image_write.h
 	@$(CXX) -c -x c++ -o $@ $< $(CXXFLAGS_EXTERNAL) -DSTB_IMAGE_WRITE_IMPLEMENTATION
+	@echo "[C++] $<"
+
+stb_image_resize-$(VEC).o: stb_image_resize.h
+	@$(CXX) -c -x c++ -o $@ $< $(CXXFLAGS_EXTERNAL) -DSTB_IMAGE_RESIZE_IMPLEMENTATION
 	@echo "[C++] $<"
 
 tinyexr-$(VEC).o: tinyexr.h

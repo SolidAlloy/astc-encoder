@@ -705,6 +705,7 @@ astc_codec_image *astc_codec_load_image(const char *filename, int padding, int *
 int store_ktx_uncompressed_image(const astc_codec_image * img, const char *filename, int bitness);
 int store_dds_uncompressed_image(const astc_codec_image * img, const char *filename, int bitness);
 int store_tga_image(const astc_codec_image * img, const char *tga_filename, int bitness);
+int store_ktx_astc_encoded_image(const char *ktx_filename, int mipmap_level_count, int xsize, int ysize, int zsize, int xdim, int ydim, int zdim, int channel_count, astc_decode_mode decode_mode, uint8_t** encoded_mipmap_levels, int* encoded_mipmap_data_sizes);
 
 int astc_codec_store_image(const astc_codec_image * img, const char *filename, int bitness, const char **format_string);
 
